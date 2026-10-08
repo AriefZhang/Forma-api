@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+*.log
+.npm-cache/
+local-ca.pem
+screenshots/

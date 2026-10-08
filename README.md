@@ -7,12 +7,26 @@ Client adalah user dengan role CLIENT; trainer juga tersimpan dalam users.
 
 ```powershell
 npm install
-docker compose up -d
 Copy-Item .env.example .env
+# Isi DATABASE_URL sesuai PostgreSQL lokal sebelum menjalankan API.
 npm run dev
 ```
 
 JWT_SECRET harus acak minimal 32 karakter. DATABASE_URL menuju PostgreSQL. PORT default 3000. WEB_ORIGIN hanya untuk akses browser; React Native tidak memakai pembatasan CORS browser. API native menggunakan header Authorization: Bearer TOKEN.
+
+`WEB_ORIGIN` bisa berisi beberapa alamat frontend yang dipisahkan koma, misalnya `http://localhost:8083,http://127.0.0.1:8083`. Isi dengan origin frontend (tanpa path), bukan URL API. Preflight browser ke `/api/auth/register` memakai `OPTIONS` dan akan dijawab 204 untuk origin yang diizinkan. Endpoint signup sebenarnya memakai `POST /api/auth/register`.
+
+Jika memakai ngrok, arahkan tunnel ke port API utama dan atur URL mobile menjadi `https://HOST-NGROK/api`. Pastikan tidak ada server preview lama di port yang sama. Preview sebaiknya dijalankan pada port terpisah, misalnya dengan `$env:PORT=3002; npm run preview`. Restart API setelah mengganti environment.
+
+Gunakan PostgreSQL lokal pada `localhost:5432`. Buat database `gym` melalui pgAdmin atau psql, lalu isi `DATABASE_URL` di `.env` dengan user dan password lokal yang memiliki izin membuat tabel pada database tersebut. Jika `.env` sudah ada, edit file tersebut tanpa menimpanya dengan contoh.
+
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/gym
+```
+
+Karakter khusus pada user/password dalam URL harus di-percent-encode. Schema, migrasi, dan seed dijalankan otomatis saat API mulai; server tidak membuat database PostgreSQL-nya.
+
+Jika nanti PostgreSQL dipindahkan ke Railway, ganti `DATABASE_URL` dengan URL koneksi yang diberikan Railway melalui environment server. Gunakan parameter TLS sesuai konfigurasi koneksi yang diberikan penyedia. Tidak perlu mengubah modul API untuk mengganti lokasi database.
 
 ```powershell
 npm run build
@@ -20,9 +34,48 @@ npm start
 npm test
 ```
 
-Untuk preview tanpa Docker: npm run preview. Preview memakai PostgreSQL embedded dalam memori, dengan data/akun sementara. PORT bisa diubah; HOST default 127.0.0.1. Jangan gunakan preview untuk production. Jalankan API asli dengan PostgreSQL untuk penyimpanan permanen.
+Untuk preview tanpa menghubungkan PostgreSQL lokal: npm run preview. Preview memakai PostgreSQL embedded dalam memori, dengan data/akun sementara. PORT bisa diubah; HOST default 127.0.0.1. Jangan gunakan preview untuk production. Jalankan API asli dengan PostgreSQL untuk penyimpanan permanen.
 
-## Data dan migrasi
+## Struktur source
+
+```text
+src/
+  main.ts                      # Bootstrap server
+  app.module.ts                # Daftar modul aplikasi
+  config/configure-app.ts      # CORS, validasi request, shutdown hooks
+  common/
+    types/auth-user.ts         # Tipe user JWT dan request terautentikasi
+    validation.ts             # Validasi UUID dan tanggal bersama
+  database/
+    database.module.ts
+    database.service.ts        # Koneksi PostgreSQL dan inisialisasi
+    schema/initial-schema.ts   # Schema awal sebelum migrasi
+    migrations/
+      002-training-plans.ts    # Perubahan plan, workout, dan set
+      index.ts                 # Daftar migrasi berurutan
+      migration-runner.ts     # Transaksi, lock, dan pencatatan versi
+    seeds/catalog.seed.ts     # Katalog otot dan latihan awal
+  modules/
+    auth/                     # Register, login, JWT guard, izin akses
+    users/                    # Profil user
+    clients/                  # Hubungan trainer-client dan persetujuan
+    exercises/                # Katalog latihan dan fokus otot
+    plans/                    # Jadwal, target set, dan mulai sesi
+    workouts/                 # Riwayat, hasil set, dan penyelesaian sesi
+    progress/                 # Agregasi progres
+    health/                   # Pemeriksaan koneksi database
+```
+
+Setiap modul fitur memiliki `*.module.ts`, `*.controller.ts`, dan `*.service.ts`.
+Controller menangani route dan input; service menjalankan aturan bisnis dan query.
+DTO berada di folder `dto/` pada modul yang menerima input terstruktur.
+`AccessService` dipakai bersama agar pemeriksaan akses trainer-client konsisten.
+
+## Schema dan migrasi
+
+Saat startup, server membuat schema awal jika belum ada, menjalankan migrasi yang belum tercatat, lalu mengisi katalog awal secara idempotent.
+Versi 2 tetap dipakai untuk kompatibilitas database yang sudah ada; refactor ini tidak membuat ulang data atau mengubah versi migrasi lama.
+Untuk perubahan berikutnya, tambahkan file `003-nama-perubahan.ts` dan daftarkan versi serta SQL-nya di `database/migrations/index.ts` sesuai urutan. Jangan mengubah migrasi yang sudah dijalankan.
 
 Tabel awal: users, trainer_clients, muscles, exercises, exercise_muscles, workouts, workout_exercises, workout_sets.
 Tabel baru: plans, plan_exercises, schema_migrations.
@@ -93,6 +146,6 @@ Start: {"date":"2026-10-07"}. PATCH set: {"reps":6,"weight":40,"rir":0,"restSeco
 
 ## Verifikasi
 
-npm test memakai PGlite (mesin PostgreSQL embedded) untuk HTTP NestJS: auth, email duplikat, persetujuan client, isolasi antaruser, transaksi/rollback, data lama, jadwal mingguan, start idempotent, rest 30 detik, hasil nol reps, RIR, failed otomatis, koreksi hasil, agregasi progres, dan pelestarian riwayat saat plan dihapus.
+npm test memakai PGlite (mesin PostgreSQL embedded) untuk HTTP NestJS: auth, profil, health, katalog fokus, email duplikat, persetujuan client, isolasi antaruser, transaksi/rollback, data lama, create/update plan, jadwal mingguan, start idempotent, rest 30 detik, hasil nol reps, RIR, failed otomatis, koreksi hasil, agregasi progres, dan pelestarian riwayat saat plan dihapus. Pengujian migrasi juga memastikan kegagalan membatalkan perubahan schema dan pencatatan versi, sehingga migrasi dapat dicoba ulang.
 
 Ini implementasi tahap pengembangan. Sebelum rilis publik, tambahkan pembatasan login, verifikasi email/reset password, alur penghapusan akun, pemantauan dan backup. HTTPS disediakan hosting/reverse proxy; JWT_SECRET dan DATABASE_URL harus melalui environment private.
